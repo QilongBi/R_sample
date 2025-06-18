@@ -1,0 +1,311 @@
+---
+title: "HW8"
+format: 
+  html:
+    embed-resources: true  
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(xgboost) 
+library(conflicted)
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+```
+
+```{r}
+arb<-read.csv("C:\\Users\\Frank\\Desktop\\listings.csv")
+arb<-arb %>%
+  select(
+    id,
+    host_location,
+    host_neighbourhood,
+    has_availability,
+    availability_30,
+    neighbourhood_cleansed,
+    picture_url,
+    calculated_host_listings_count_entire_homes,
+    host_url,
+    host_about,
+    price,
+    amenities
+  )
+```
+
+```{r}
+listings_long <- arb |>
+  transmute(
+    id,
+    amenities_list = map(amenities, \(x) {
+      clean_x <- gsub('\\[|\\]|"', '', x)
+      out <- str_split(clean_x, ", ", simplify = FALSE)[[1]]
+      out
+    })
+  ) |>
+  unnest(cols = amenities_list) |>
+  filter(!is.na(amenities_list), amenities_list != "") |>
+  mutate(amenities_list = as.character(amenities_list))
+
+
+
+table(listings_long$amenities_list) |> 
+  sort() |> 
+  tail(20)
+
+NumAm = 200
+top_amenities <- listings_long |>
+  count(amenities_list, sort = TRUE) |>
+  slice_head(n = NumAm) |>
+  pull(amenities_list)
+
+listings_for_pivot <- listings_long |>
+  filter(amenities_list %in% top_amenities) |>
+  dplyr::select(id, amenities_list) |>
+  mutate(value = 1) |>
+  distinct()
+
+
+listings_wide <- listings_for_pivot |>
+  pivot_wider(
+    id_cols = "id",
+    names_from  = "amenities_list",
+    values_from = "value",
+    values_fill = 0
+  )
+
+listings_wide <- listings_wide |>
+  left_join(arb, by = "id")
+
+listings_wide = listings_wide |> mutate(
+  price = as.numeric(gsub("[\\$,]", "", price)))
+```
+
+```{r}
+
+pca_data<-listings_wide%>%select_if(is.numeric)
+
+if (any(colSums(is.na(pca_data)) > 0)) {
+  print(colnames(pca_data)[colSums(is.na(pca_data)) > 0])
+}
+
+
+```
+
+**The data above is used to cleaning the data and generate the data used for PCA.Most of them from HW3**
+
+```{r}
+# this part use for PCA analyze and select the top 10 PC that useful for latter analyzing. 
+# The plot shows that how percentage of variance of these 10 pcs
+library(factoextra)
+pca_result <- prcomp(pca_data %>% select(-id, -price), scale. = TRUE)
+
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 10))
+df_pca <- as.data.frame(pca_result$x[, 1:10])
+colnames(df_pca) <- paste0("PC_", 1:10)
+
+```
+
+```{r}
+# In this chunck I merge the pc into the original data generate the data use for rf model
+# I also seperate the train data and test data at this stage
+df_pca <- df_pca %>% mutate(id = listings_wide$id)
+final_data<-inner_join(arb,df_pca,by="id")
+
+final_data<-final_data%>%select(-amenities)
+final_data <- final_data %>%
+  mutate(price_log = as.numeric(gsub("\\$", "", price)))
+
+
+final_data$price_log=as.numeric(final_data$price_log)
+
+final_data<-final_data%>%mutate(price_log=log(price_log))
+
+
+final_data<-na.omit(final_data)
+                                
+
+
+set.seed(42)  
+data_split <- initial_split(final_data, prop = 0.8)  
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+
+```
+
+```{r}
+
+# setting up the recipe and cv process with tidy model
+rf_recipe <- recipe(price_log ~ ., data = train_data) %>%
+  update_role(id, new_role = "id","price") 
+
+cv_folds <- vfold_cv(train_data, v = 5)
+
+```
+
+```{r}
+
+# using tidymodel to conduct the Random forest model, and set tree as 50 at begining
+
+
+rf_model <- rand_forest(
+  trees = 50,  
+  mtry = tune(),  
+  min_n = tune(),  
+  mode = "regression"
+) %>%
+  set_engine("ranger", importance = "impurity")  
+
+
+rf_workflow <- workflow() %>%
+  add_model(rf_model) %>%
+  add_recipe(rf_recipe)
+
+
+# rf_grid <- grid_regular(
+#   mtry(range = c(2, 10)),  
+#   min_n(range = c(5, 50)),  
+#   levels = 10 
+# )
+
+
+rf_tune_results <- tune_grid(
+  rf_workflow,
+  resamples = cv_folds,  
+  metrics = metric_set(rmse, rsq),
+  control = control_grid(save_pred = TRUE)  
+)
+
+# select the best model
+best_rf <- rf_tune_results %>%
+  select_best(metric = "rmse")
+
+```
+
+```{r}
+# use the best hyper parameter and plot the VIP under such model
+library(vip)  
+library(ggplot2) 
+final_rf_workflow <- finalize_workflow(rf_workflow, best_rf)
+
+final_rf_fit <- fit(final_rf_workflow, data = train_data)
+
+
+
+
+rf_final_model <- extract_fit_parsnip(final_rf_fit)  
+
+
+rf_importance <- vip(rf_final_model, num_features = 20)  
+
+
+print(rf_importance)
+
+```
+
+```{r}
+
+# use the model to predict and give the performance of my model
+test_predictions <- predict(final_rf_fit, test_data) %>%
+  bind_cols(test_data)
+
+test_metrics <- test_predictions %>%
+  metrics(truth = price_log, estimate = .pred)
+
+print(test_metrics)
+```
+
+The predictive performance of my model is relatively low, primarily due to the limited number of trees selected in the random forest. In general, increasing the number of trees allows the model to capture more complex patterns in the data and reduce variance, leading to improved predictive accuracy. However, with only 50 trees, the model may not have sufficient depth and stability to generalize well, resulting in higher prediction errors. A larger ensemble of trees would likely enhance the model's robustness and performance by reducing overfitting to specific training data and improving overall generalization to unseen data.
+
+```{r}
+# plot the graph to better exdplain the above words.
+
+
+ggplot(test_predictions, aes(x = price_log, y = .pred)) +
+  geom_point(alpha = 0.5, color = "black") +  
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +  
+  labs(title = " Prediction vs Reality", 
+       x = "real", 
+       y = "predict") +
+  theme_minimal()
+```
+
+```{r}
+# the following part conduct the exact process as above, except I have more trees.
+
+
+rf_model2 <- rand_forest(
+  trees = 500,  
+  mtry = tune(),  
+  min_n = tune(),  
+  mode = "regression"
+) %>%
+  set_engine("ranger", importance = "impurity")  
+
+
+rf_workflow2 <- workflow() %>%
+  add_model(rf_model2) %>%
+  add_recipe(rf_recipe)
+
+
+# rf_grid <- grid_regular(
+#   mtry(range = c(2, 10)),  
+#   min_n(range = c(5, 50)),  
+#   levels = 10 
+# )
+
+
+rf_tune_results2 <- tune_grid(
+  rf_workflow2,
+  resamples = cv_folds,  
+  metrics = metric_set(rmse, rsq),
+  control = control_grid(save_pred = TRUE)  
+)
+
+# select the best model
+best_rf2 <- rf_tune_results2 %>%
+  select_best(metric = "rmse")
+
+```
+
+```{r}
+final_rf_workflow2 <- finalize_workflow(rf_workflow, best_rf2)
+
+final_rf_fit2 <- fit(final_rf_workflow2, data = train_data)
+
+
+
+
+rf_final_model2 <- extract_fit_parsnip(final_rf_fit2)  
+
+
+rf_importance2 <- vip(rf_final_model2, num_features = 20)  
+
+
+print(rf_importance2)
+
+```
+
+```{r}
+test_predictions2 <- predict(final_rf_fit2, test_data) %>%
+  bind_cols(test_data)
+
+test_metrics2 <- test_predictions2 %>%
+  metrics(truth = price_log, estimate = .pred)
+
+print(test_metrics2)
+```
+
+```{r}
+ggplot(test_predictions2, aes(x = price_log, y = .pred)) +
+  geom_point(alpha = 0.5, color = "black") +  
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", size = 1) +  
+  labs(title = " Prediction vs Reality", 
+       x = "real", 
+       y = "predict") +
+  theme_minimal()
+```
+
+The model of this result is slight better.

@@ -1,0 +1,267 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+neighbor <- read.csv("C:\\Users\\Frank\\Desktop\\listings.csv")
+```
+
+You can add options to executable code like this
+
+```{r}
+
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+```{r}
+#| echo: false
+# doing the primary check
+
+nobs<-nrow((neighbor))
+
+glimpse(neighbor)
+print(colnames(neighbor))
+dim(neighbor)
+head(neighbor)
+
+
+hi <- function(data) {
+  apply(data, 1, function(col) sum(is.na(col)))
+}
+
+
+na_check<-hi(neighbor)
+
+
+
+hist(na_check)
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+
+neighbor_try <- neighbor %>%
+  select(
+    id,
+    host_location,
+    host_neighbourhood,
+    has_availability,
+    availability_30,
+    neighbourhood_cleansed,
+    picture_url,
+    calculated_host_listings_count_entire_homes,
+    host_url,
+    host_about,
+    price
+  )
+
+errors <- neighbor_try %>%
+  mutate(
+    id_error = ifelse(id <= 0 | is.na(id), TRUE, FALSE), 
+    availability_30_error = ifelse(availability_30 < 0 | availability_30 > 30 | is.na(availability_30), TRUE, FALSE),
+    host_location_error = ifelse(host_location == "" | is.na(host_location), TRUE, FALSE), 
+    calculated_listings_error = ifelse(calculated_host_listings_count_entire_homes < 0 | is.na(calculated_host_listings_count_entire_homes), TRUE, FALSE) 
+  )
+
+
+final_result<- errors%>%filter(id_error==FALSE)
+final_result<- errors%>%filter(availability_30_error==FALSE)
+final_result<-errors%>%filter(host_location_error==FALSE)
+final_result<-errors%>%filter(calculated_listings_error==FALSE)
+
+# by filter the data from with some condition, my code aviod the obivous mistake 
+
+```
+
+```{r}
+library(stringr)
+
+
+
+
+
+amenities_clean <- neighbor %>%
+  mutate(
+    amenities_clean = gsub("\\[|\\]|\"", "", amenities), 
+    amenities_list = strsplit(amenities_clean, ", ")     
+  )
+
+
+all_amenities <- unique(unlist(amenities_clean$amenities_list))
+
+
+limited_amenities <- all_amenities[1:100]
+
+
+for (limited_amenity in limited_amenities) {
+  amenities_clean[[limited_amenity]] <- sapply(
+    amenities_clean$amenities_list, 
+    function(amenity_list) ifelse(limited_amenity %in% amenity_list, 1, 0)
+  )
+}
+
+
+
+
+                                                      
+                                                      
+
+
+
+```
+
+final_result\$price
+
+```{r}
+amenities_clean_trans <- amenities_clean %>%
+  mutate(price = as.numeric(gsub("\\$", "", price)))
+
+amenities_clean_trans<-amenities_clean_trans%>%filter(price!=NA)
+
+
+# print(amenities_clean$price)
+# I transform my price data to a numeric data, so that can be easily to graph
+
+
+final_result$price
+
+```
+
+```{r}
+final_result <- final_result %>%
+  mutate(price = as.numeric(gsub("\\$", "", price)))
+
+
+
+
+
+
+mean_price <- final_result %>%
+  group_by(host_neighbourhood) %>%
+  summarize(mean_price = mean(price, na.rm = TRUE))
+
+
+top_20_neighbourhoods <- mean_price %>%
+  arrange(desc(mean_price)) %>%  
+  slice_head(n = 20)  
+
+ggplot(top_20_neighbourhoods, aes(x = host_neighbourhood, y = mean_price)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(
+    title = "Mean Price by Host Neighbourhood",
+    x = "Host Neighbourhood",
+    y = "Mean Price"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+ggplot(top_20_neighbourhoods, aes(x = host_neighbourhood, y = mean_price)) +
+  geom_point(size = 3, color = "blue") +  
+  labs(
+    title = "Mean Price by Host Neighbourhood",
+    x = "Host Neighbourhood",
+    y = "Mean Price"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+
+least_20_neighbourhoods <- mean_price %>%
+  arrange(mean_price) %>%  
+  slice_head(n = 20)  
+
+
+ggplot(least_20_neighbourhoods, aes(x = reorder(host_neighbourhood, mean_price), y = mean_price)) +
+  geom_boxplot(fill = "skyblue", color = "black") +
+  labs(
+    title = "Mean Price by Host Neighbourhood ",
+    x = "Host Neighbourhood",
+    y = "Mean Price"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+```{r}
+whole_number <- final_result %>%
+  group_by(host_neighbourhood) %>%
+  summarize(whole_number = n())
+
+most_20_neighbourhoods_num <- whole_number %>%
+  arrange(desc(whole_number)) %>%  
+  slice_head(n = 20)               
+
+ggplot(most_20_neighbourhoods_num, aes(x = reorder(host_neighbourhood, whole_number), y = whole_number)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +  
+  labs(
+    title = "Top 20 Neighbourhoods by Whole Number",
+    x = "Host Neighbourhood",
+    y = "Whole Number"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+
+
+
+
+
+```
+
+```{r}
+available <- final_result %>%
+  group_by(host_neighbourhood) %>%
+  summarize(available = sum(!is.na(availability_30)))
+
+most_20_neighbourhoods_available <- available %>%
+  arrange(desc(available)) %>%  
+  slice_head(n = 20)            
+
+
+ggplot(most_20_neighbourhoods_available, aes(x = available, y = reorder(host_neighbourhood, available))) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(
+    title = "Availability by Host Neighbourhood",
+    x = "Availability",
+    y = "Host Neighbourhood"
+  ) +
+  theme_minimal()
+
+
+```
+
+Based on the statistical charts I created, it is evident that the **Cambridge** neighborhood stands out as having the most available houses in the next 30 days, as well as the highest total number of houses overall.
+
+In contrast, when looking at pricing, **Scottsdale** emerges as the most expensive neighborhood, with significantly higher average prices than other areas. T On the other hand, **Park Manor** is the least expensive neighborhood, with much lower average prices. This could indicate a more affordable housing market or different socioeconomic factors influencing the pricing in that area.
